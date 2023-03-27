@@ -1,0 +1,7 @@
+/target
+.idea
+config/local*
+test.db
+bot
+user
+config.yaml
