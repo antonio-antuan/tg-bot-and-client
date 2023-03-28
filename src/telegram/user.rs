@@ -16,18 +16,15 @@ type TgUpdate = Receiver<String>;
 type FromService = Receiver<String>;
 type ToService = Sender<String>;
 
+#[derive(Clone)]
 pub struct UserClient {
-    inner: Inner,
-}
-
-struct Inner {
     client: Client<TdJson>,
 }
 
 impl UserClient {
     pub fn new(client: TgClient) -> Self {
         Self {
-            inner: Inner { client },
+            client
         }
     }
 
@@ -54,7 +51,6 @@ impl UserClient {
 
     pub async fn get_channel_history(&self, chat_id: i64, limit: i32) -> anyhow::Result<Vec<Post>> {
         let history = self
-            .inner
             .client
             .get_chat_history(
                 GetChatHistory::builder()
@@ -89,14 +85,12 @@ impl UserClient {
 
     pub async fn get_all_channels(&self) -> anyhow::Result<Vec<NewChannel>> {
         let chats = self
-            .inner
             .client
             .get_chats(GetChats::builder().limit(9999).build())
             .await?;
         let mut result = Vec::with_capacity(chats.chat_ids().len());
         for chat_id in chats.chat_ids().into_iter() {
             let chat = self
-                .inner
                 .client
                 .get_chat(GetChat::builder().chat_id(*chat_id).build())
                 .await?;
@@ -104,7 +98,6 @@ impl UserClient {
             if let ChatType::Supergroup(type_sg) = chat.type_() {
                 if type_sg.is_channel() {
                     let sg = self
-                        .inner
                         .client
                         .get_supergroup(
                             GetSupergroup::builder()
@@ -122,7 +115,6 @@ impl UserClient {
 
     pub async fn search_channel(&self, channel_name: &str) -> anyhow::Result<Option<NewChannel>> {
         let chat = self
-            .inner
             .client
             .search_public_chat(SearchPublicChat::builder().username(channel_name).build())
             .await?;

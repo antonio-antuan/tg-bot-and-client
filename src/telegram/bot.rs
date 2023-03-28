@@ -1,10 +1,14 @@
+use std::collections::HashMap;
+use std::future::Future;
 use crate::telegram::{TgClient, TgWorker, SEND_UPDATE_TIMEOUT};
 use anyhow::{anyhow, Result};
 use rust_tdlib::client::tdlib_client::TdJson;
 use rust_tdlib::client::{Client, ClientIdentifier};
-use rust_tdlib::types::{BotCommand, FormattedText, GetMe, InputMessageContent, InputMessageText, MessageContent, MessageSender, SendMessage, SetCommands, TdlibParameters, TextEntityType, Update, UpdateNewMessage};
+use rust_tdlib::types::{BotCommand as TdLibBotCommand, FormattedText, GetMe, InputMessageContent, InputMessageText, MessageContent, MessageSender, SendMessage, SetCommands, TdlibParameters, TextEntityType, Update, UpdateNewMessage};
 use std::rc::Rc;
 use std::time::Duration;
+use serde::Deserialize;
+use strum::{EnumIter, EnumString, EnumVariantNames, VariantNames, IntoEnumIterator, Display};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::task::JoinHandle;
@@ -13,7 +17,7 @@ use tokio::task::JoinHandle;
 pub struct BotUpdate {
     chat_id: i64,
     user_id: i64,
-    message: String,
+    message: BotCommand,
 }
 
 type TgUpdate = Receiver<BotUpdate>;
@@ -22,6 +26,14 @@ type ToService = Sender<String>;
 
 pub struct BotClient {
     client: Option<TgClient>,
+}
+
+#[derive(Debug, Display, Clone, EnumMessage, EnumIter)]
+enum BotCommand {
+    #[strum(message = "/start", detailed_message = "starts bot interaction", props(func="start"))]
+    Start,
+    #[strum(message = "/add", detailed_message = "adds a channel", props(func="add"))]
+    Add(String)
 }
 
 impl BotClient {
@@ -38,12 +50,27 @@ impl BotClient {
         to_service: ToService,
     ) -> Result<JoinHandle<()>> {
         let client = self.client.take().unwrap();
+        let mut methods = HashMap::from([
+            ("start".to_string(), BotClient::startBot),
+            ("add".to_string(), BotClient::add)]);
+
         client
-            .set_commands(SetCommands::builder().commands(vec![
-                BotCommand::builder().command("/start").description("start").build(),
-                BotCommand::builder().command("/add").description("adds new channel").build(),
-            ]))
+            .set_commands(SetCommands::builder().commands(
+                BotCommand::iter().map(|cmd| {
+                    let message = cmd.get_message().expect(format!("message not specified for {}", cmd));
+                    let det_message = cmd.get_detailed_message().expect(format!("detailed message not specified for {}", cmd));
+                    let func_name = cmd.get_str("func").expect(format!("func not specified for {}", cmd));
+                    if func_name.is_empty() {
+                        panic!("empty func_name for {}", cmd);
+                    }
+                    if !methods.contains_key(func_name) {
+                        panic!("func_name {} not found for {}", func_name, cmd);
+                    }
+                    TdLibBotCommand::builder().command(message).description(det_message).build()
+                }).collect()
+            ))
             .await?;
+
         let me = client.get_me(GetMe::builder().build()).await?;
 
         Ok(tokio::spawn(async move {
@@ -76,6 +103,14 @@ impl BotClient {
                 }
             }
         }))
+    }
+
+    async fn startBot() {
+
+    }
+
+    async fn add() {
+
     }
 }
 

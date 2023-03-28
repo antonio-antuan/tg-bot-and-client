@@ -4,12 +4,10 @@ use super::{TgClient, TgWorker};
 use crate::telegram::user::init_client_updates_reader;
 use anyhow::{bail, Result};
 use rust_tdlib::client::tdlib_client::TdLibClient;
-use rust_tdlib::client::{
-    AuthStateHandlerProxy, Client, ClientIdentifier, ConsoleClientStateHandlerIdentified, Worker,
-};
+use rust_tdlib::client::{AuthStateHandlerProxy, Client, ClientIdentifier, ClientState, ConsoleClientStateHandlerIdentified, Worker};
 use rust_tdlib::tdjson::set_log_verbosity_level;
 use rust_tdlib::types::Update::User;
-use rust_tdlib::types::{TdlibParameters, Update};
+use rust_tdlib::types::{AuthorizationState, TdlibParameters, Update};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
@@ -66,7 +64,7 @@ impl TelegramService {
                 init_bot_updates_reader,
             )
             .await?;
-        tokio::time::sleep(Duration::from_secs(5)).await;
+
         let (ucl, urecv) = self
             .build_client(
                 &mut worker,
@@ -135,6 +133,7 @@ impl TelegramService {
                     .enable_storage_optimizer(true)
                     .build(),
             )
+            .with_auth_state_channel(10)
             .with_client_auth_state_handler(ConsoleClientStateHandlerIdentified::new(ident))
             .with_updates_sender(sender)
             .build()?;
@@ -142,6 +141,27 @@ impl TelegramService {
         let recv = updates_handler(receiver);
 
         let client = worker.bind_client(client).await?;
+
+        loop {
+            match worker.wait_auth_state_change(&client).await? {
+                Ok(state) => match state {
+                    ClientState::Opened => {
+                        log::debug!("client authorized; can start interaction");
+                        break
+                    }
+                    ClientState::Closed => {
+                        bail!("client closed, need to reauthorize it");
+                    }
+                    ClientState::Authorizing => {
+                        log::debug!("client not authorized yet")
+                    }
+                },
+                Err((err, auth_state)) => {
+                    bail!(err)
+                }
+            }
+        }
+
         Ok((client, recv))
     }
 
