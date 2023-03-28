@@ -1,6 +1,7 @@
 use crate::db::DbService;
 use crate::telegram::{NewUpdate, TelegramService};
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 const HISTORY_LIMIT: i32 = 100;
@@ -24,8 +25,15 @@ impl App {
 
     pub async fn start(&self) -> anyhow::Result<JoinHandle<()>> {
         log::info!("starting telegram service");
-        let h = self.inner.tg.start().await?;
+        let (fas, far) = mpsc::channel(10);
+        let (tas, mut tar) = mpsc::channel(10);
+        let h = self.inner.tg.start(far, tas).await?;
         log::info!("telegram service started");
+        tokio::spawn(async move {
+            while let Some(r) = tar.recv().await {
+                log::info!("new app request: {:?}", r);
+            }
+        });
         Ok(h)
     }
     //
@@ -36,8 +44,4 @@ impl App {
     //     }
     //     Ok(())
     // }
-}
-
-fn rss_err<E: std::fmt::Debug>(err: E) -> anyhow::Error {
-    anyhow::anyhow!("error building rss feed: {:?}", err)
 }

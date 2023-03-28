@@ -19,7 +19,7 @@ serde = {version = "1", features = ["derive"]}
 strum = { version = "0.24", features = ["derive"] }
 
 [dependencies.rust-tdlib]
-path = "/home/john/Projects/private/rust-tdlib"
+path = "/home/sergey/Projects/rust-tdlib"
 
 [dependencies.sqlx]
 version = "0.6.3"

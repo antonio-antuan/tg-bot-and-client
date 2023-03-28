@@ -1,4 +1,4 @@
-use super::bot::{init_bot_updates_reader, BotClient};
+use super::bot::{init_bot_updates_reader, BotClient, BotRequests};
 use super::user::UserClient;
 use super::{TgClient, TgWorker};
 use crate::telegram::user::init_client_updates_reader;
@@ -10,9 +10,17 @@ use rust_tdlib::types::Update::User;
 use rust_tdlib::types::{AuthorizationState, TdlibParameters, Update};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc::Receiver;
+use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::{mpsc, RwLock};
 use tokio::task::JoinHandle;
+
+#[derive(Debug)]
+pub enum ServiceRequests {
+    Bot(BotRequests)
+}
+
+type FromApp = Receiver<String>;
+type ToApp = Sender<ServiceRequests>;
 
 #[derive(Clone)]
 pub struct TelegramService {
@@ -40,7 +48,7 @@ impl TelegramService {
         }
     }
 
-    pub async fn start(&self) -> Result<JoinHandle<()>> {
+    pub async fn start(&self, from_app: FromApp, to_app: ToApp) -> Result<JoinHandle<()>> {
         if self.inner.read().await.is_some() {
             bail!("service already started");
         }
@@ -75,7 +83,7 @@ impl TelegramService {
 
         let mut bot_client = BotClient::new(bcl);
         let (bss, bsr) = mpsc::channel(10);
-        let (sbs, sbr) = mpsc::channel(10);
+        let (sbs, mut sbr) = mpsc::channel(10);
         let bot_handle = bot_client.start(brecv, bsr, sbs).await?;
 
         let mut user_client = UserClient::new(ucl);
@@ -85,6 +93,9 @@ impl TelegramService {
 
         let join = tokio::spawn(async move {
             tokio::select! {
+                Some(bot_req) = sbr.recv() => {
+                    to_app.send(ServiceRequests::Bot(bot_req)).await;
+                }
                 _ = worker_waiter => {
                     log::info!("worker exited");
                 }
@@ -94,7 +105,7 @@ impl TelegramService {
                 _ = user_handle => {
                     log::info!("user exited");
                 }
-            };
+            }
         });
 
         self.inner.write().await.insert(Inner {

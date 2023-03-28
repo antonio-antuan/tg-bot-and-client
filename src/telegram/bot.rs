@@ -1,39 +1,48 @@
-use std::collections::HashMap;
-use std::future::Future;
-use crate::telegram::{TgClient, TgWorker, SEND_UPDATE_TIMEOUT};
+use crate::telegram::{TgClient, SEND_UPDATE_TIMEOUT};
 use anyhow::{anyhow, Result};
-use rust_tdlib::client::tdlib_client::TdJson;
-use rust_tdlib::client::{Client, ClientIdentifier};
-use rust_tdlib::types::{BotCommand as TdLibBotCommand, FormattedText, GetMe, InputMessageContent, InputMessageText, MessageContent, MessageSender, SendMessage, SetCommands, TdlibParameters, TextEntityType, Update, UpdateNewMessage};
-use std::rc::Rc;
-use std::time::Duration;
-use serde::Deserialize;
-use strum::{EnumIter, EnumString, EnumVariantNames, VariantNames, IntoEnumIterator, Display};
+use rust_tdlib::types::{BotCommand as TdLibBotCommand, FormattedText, GetMe, InputMessageContent, InputMessageText, MessageContent, MessageSender, SearchPublicChat, SendMessage, SetCommands, TextEntityType, Update, UpdateNewMessage};
+use strum::{EnumIter, IntoEnumIterator, Display, EnumMessage};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::task::JoinHandle;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct BotUpdate {
     chat_id: i64,
     user_id: i64,
     message: BotCommand,
 }
 
+#[derive(Debug)]
+pub struct UserChannel {
+    user_id: i64,
+    channel_name: String,
+}
+
+
+#[derive(Debug)]
+pub enum BotRequests {
+    AddUser(i64),
+    RemoveUser(i64),
+    AddUserChannel(UserChannel),
+    RemoveUserChannel(UserChannel)
+}
+
 type TgUpdate = Receiver<BotUpdate>;
-type FromService = Receiver<String>;
-type ToService = Sender<String>;
+type FromTgService = Receiver<String>;
+type ToTgService = Sender<BotRequests>;
 
 pub struct BotClient {
     client: Option<TgClient>,
 }
 
-#[derive(Debug, Display, Clone, EnumMessage, EnumIter)]
+#[derive(Debug, Display, EnumMessage, EnumIter)]
 enum BotCommand {
-    #[strum(message = "/start", detailed_message = "starts bot interaction", props(func="start"))]
+    #[strum(message = "/start", detailed_message = "starts bot interaction")]
     Start,
-    #[strum(message = "/add", detailed_message = "adds a channel", props(func="add"))]
-    Add(String)
+    #[strum(message = "/add", detailed_message = "adds a channel")]
+    Add(String),
+    Invalid,
 }
 
 impl BotClient {
@@ -46,27 +55,24 @@ impl BotClient {
     pub async fn start(
         &mut self,
         mut tg_update: TgUpdate,
-        mut from_service: FromService,
-        to_service: ToService,
+        mut from_service: FromTgService,
+        to_service: ToTgService,
     ) -> Result<JoinHandle<()>> {
         let client = self.client.take().unwrap();
-        let mut methods = HashMap::from([
-            ("start".to_string(), BotClient::startBot),
-            ("add".to_string(), BotClient::add)]);
 
         client
             .set_commands(SetCommands::builder().commands(
-                BotCommand::iter().map(|cmd| {
-                    let message = cmd.get_message().expect(format!("message not specified for {}", cmd));
-                    let det_message = cmd.get_detailed_message().expect(format!("detailed message not specified for {}", cmd));
-                    let func_name = cmd.get_str("func").expect(format!("func not specified for {}", cmd));
-                    if func_name.is_empty() {
-                        panic!("empty func_name for {}", cmd);
+                BotCommand::iter().filter_map(|cmd| {
+                    let message = cmd.get_message();
+                    let det_message = cmd.get_detailed_message();
+
+                    match (message, det_message) {
+                        (Some(message), Some(det_message)) => {
+                            Some(TdLibBotCommand::builder().command(message).description(det_message).build())
+                        }
+                        _ => None
                     }
-                    if !methods.contains_key(func_name) {
-                        panic!("func_name {} not found for {}", func_name, cmd);
-                    }
-                    TdLibBotCommand::builder().command(message).description(det_message).build()
+
                 }).collect()
             ))
             .await?;
@@ -77,24 +83,32 @@ impl BotClient {
             loop {
                 tokio::select! {
                     Some(tg_upd) = tg_update.recv() => {
-                        log::debug!("new command: {}", tg_upd.message);
                         if tg_upd.user_id == me.id() {
                             continue
                         }
-                        client.send_message(
-                            SendMessage::builder()
-                            .chat_id(tg_upd.chat_id)
-                            .input_message_content(
-                                InputMessageContent::InputMessageText(
-                                    InputMessageText::builder().text(
-                                        FormattedText::builder().text(
-                                            format!("got message: {}", tg_upd.message)
-                                        ).build()
-                                    ).build()
-                                )
-                            )
-                            .build(),
-                        ).await;
+                        let msg = match &tg_upd.message {
+                            BotCommand::Invalid => {
+                                make_invalid_request_resp(tg_upd.chat_id)
+                            },
+                            BotCommand::Add(channel_name) => {
+                                match client.search_public_chat(SearchPublicChat::builder().username(channel_name).build()).await {
+                                    Err(_) => make_channel_not_found_resp(tg_upd.chat_id, channel_name),
+                                    Ok(_) => {
+                                        let resp = make_channel_added_resp(tg_upd.chat_id, channel_name);
+                                        to_service.send(BotRequests::AddUserChannel(UserChannel{
+                                            user_id: tg_upd.user_id,
+                                            channel_name: channel_name.clone(),
+                                        })).await;
+                                        resp
+                                    }
+                                }
+                            },
+                            BotCommand::Start => {
+                                to_service.send(BotRequests::AddUser(tg_upd.user_id)).await;
+                                make_start_resp(tg_upd.chat_id)
+                            }
+                        };
+                        client.send_message(msg).await;
                     },
 
                     Some(from_srv) = from_service.recv() => {
@@ -104,14 +118,6 @@ impl BotClient {
             }
         }))
     }
-
-    async fn startBot() {
-
-    }
-
-    async fn add() {
-
-    }
 }
 
 pub fn init_bot_updates_reader(mut receiver: Receiver<Box<Update>>) -> TgUpdate {
@@ -120,7 +126,6 @@ pub fn init_bot_updates_reader(mut receiver: Receiver<Box<Update>>) -> TgUpdate 
     tokio::spawn(async move {
         while let Some(update) = receiver.recv().await {
             let new_update = match update.as_ref() {
-                Update::MessageContent(content) => None,
                 Update::NewMessage(new_message) => handle_message_to_bot(new_message),
                 _ => None,
             };
@@ -129,7 +134,7 @@ pub fn init_bot_updates_reader(mut receiver: Receiver<Box<Update>>) -> TgUpdate 
                     .send_timeout(new_update, SEND_UPDATE_TIMEOUT)
                     .await
                 {
-                    log::error!("cannot send new update");
+                    log::error!("cannot send new update: {}", err);
                 }
             }
         }
@@ -147,25 +152,97 @@ fn handle_message_to_bot(new_message: &UpdateNewMessage) -> Option<BotUpdate> {
                 TextEntityType::BotCommand(_) => true,
                 _ => false,
             });
-            if is_bot_command {
-                match new_message.message().sender_id() {
-                    MessageSender::_Default => {
-                        todo!()
+
+            match new_message.message().sender_id() {
+                MessageSender::_Default => {
+                    todo!()
+                }
+                MessageSender::Chat(_) => {
+                    todo!()
+                }
+                MessageSender::User(user) => {
+                    let message: BotCommand;
+                    if !is_bot_command {
+                        message = BotCommand::Invalid
+                    } else {
+                        message = match text.text() {
+                            x if x.starts_with("/add") => {
+                                BotCommand::Add(text.text().clone().chars().skip(4).collect())
+                            },
+                            x if x.starts_with("/start") => {
+                                BotCommand::Start
+                            },
+                            _ => BotCommand::Invalid
+                        };
                     }
-                    MessageSender::Chat(_) => {
-                        todo!()
-                    }
-                    MessageSender::User(user) => {
-                        return Some(BotUpdate{
-                            chat_id: new_message.message().chat_id(),
-                            user_id: user.user_id(),
-                            message: text.text().clone(),
-                        })
-                    }
+                    return Some(BotUpdate{
+                        chat_id: new_message.message().chat_id(),
+                        user_id: user.user_id(),
+                        message,
+                    })
                 }
             }
-            None
         }
         _ => None,
     }
+}
+
+fn make_channel_not_found_resp(chat_id: i64, channel_name: &str) -> SendMessage {
+    SendMessage::builder()
+        .chat_id(chat_id)
+        .input_message_content(
+            InputMessageContent::InputMessageText(
+                InputMessageText::builder().text(
+                    FormattedText::builder().text(
+                        format!("channel {} not found", channel_name)
+                    ).build()
+                ).build()
+            )
+        )
+        .build()
+}
+
+fn make_channel_added_resp(chat_id: i64, channel_name: &str) -> SendMessage {
+    SendMessage::builder()
+        .chat_id(chat_id)
+        .input_message_content(
+            InputMessageContent::InputMessageText(
+                InputMessageText::builder().text(
+                    FormattedText::builder().text(
+                        format!("channel {} added", channel_name)
+                    ).build()
+                ).build()
+            )
+        )
+        .build()
+}
+
+fn make_invalid_request_resp(chat_id: i64) -> SendMessage {
+    SendMessage::builder()
+        .chat_id(chat_id)
+        .input_message_content(
+            InputMessageContent::InputMessageText(
+                InputMessageText::builder().text(
+                    FormattedText::builder().text(
+                        "invalid request"
+                    ).build()
+                ).build()
+            )
+        )
+        .build()
+}
+
+fn make_start_resp(chat_id: i64) -> SendMessage {
+    SendMessage::builder()
+        .chat_id(chat_id)
+        .input_message_content(
+            InputMessageContent::InputMessageText(
+                InputMessageText::builder().text(
+                    FormattedText::builder().text(
+                        "started"
+                    ).build()
+                ).build()
+            )
+        )
+        .build()
 }
