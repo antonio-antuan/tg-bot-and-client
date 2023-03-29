@@ -31,4 +31,5 @@ async fn main() {
     let app = App::new(telegram, db);
     let waiter = app.start().await.expect("cannot start application");
     waiter.await;
+    log::info!("finished");
 }

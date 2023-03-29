@@ -9,7 +9,8 @@ mod parsers;
 mod service;
 mod user;
 
-pub use service::TelegramService;
+pub use bot::{AddUserChannel, BotRequests, BotResponseListChannels, BotResponses};
+pub use service::{ServiceRequests, ServiceResponses, TelegramService};
 
 const SEND_UPDATE_TIMEOUT: Duration = Duration::from_secs(15);
 

@@ -23,9 +23,7 @@ pub struct UserClient {
 
 impl UserClient {
     pub fn new(client: TgClient) -> Self {
-        Self {
-            client
-        }
+        Self { client }
     }
 
     pub async fn start(

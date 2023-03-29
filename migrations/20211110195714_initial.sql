@@ -1,5 +1,5 @@
 drop table if exists posts cascade;
-drop table if exists client_channel cascade ;
+drop table if exists user_channel cascade ;
 drop table if exists users cascade ;
 drop table if exists channels cascade;
 
@@ -14,19 +14,18 @@ CREATE TABLE posts (
 );
 
 create table channels (
-                          id serial primary key,
+                          id bigint not null primary key,
                           title text not null,
-                          username text not null unique,
-                          telegram_id bigint not null
+                          username text not null unique
 );
 
 create table users (
-    id serial primary key,
-    user_id bigint not null unique,
-    enabled bool not null default true
+    id bigint not null primary key,
+    enabled bool not null default true,
+    chat_id bigint not null
 );
 
-create table client_channel (
+create table user_channel (
     id serial primary key,
     user_id bigint not null references users(id),
     channel_id bigint not null references channels(id),

@@ -33,16 +33,35 @@ impl Post {
 }
 
 #[derive(Debug)]
+pub struct NewUser {
+    pub user_id: i64,
+    pub chat_id: i64,
+    pub enabled: bool,
+}
+
+#[derive(Debug)]
 pub struct NewChannel {
     pub title: String,
     pub telegram_id: TelegramChatId,
     pub username: String,
 }
 
+#[derive(Debug)]
+pub struct NewUserChannel {
+    pub user_id: i64,
+    pub channel_id: i64,
+}
+
+#[derive(Debug)]
+pub struct RemoveUserChannel {
+    pub user_id: i64,
+    pub channel_name: String,
+}
+
 #[derive(Debug, sqlx::FromRow)]
 pub struct Channel {
-    pub id: i32,
+    pub id: i64,
     pub title: String,
     pub username: String,
-    pub telegram_id: TelegramChatId,
+    // pub telegram_id: TelegramChatId,
 }
